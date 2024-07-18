@@ -37,60 +37,13 @@
 //
 //   See end of file for license information.
 
-#ifndef STB_INCLUDE_STB_DXT_H
-#define STB_INCLUDE_STB_DXT_H
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#ifdef STB_DXT_STATIC
-#define STBDDEF static
-#else
-#define STBDDEF extern
-#endif
+#include "Imaging.h"
+#include <math.h>
 
 // compression mode (bitflags)
 #define STB_DXT_NORMAL    0
 #define STB_DXT_DITHER    1   // use dithering. was always dubious, now deprecated. does nothing!
 #define STB_DXT_HIGHQUAL  2   // high quality mode, does two refinement steps instead of 1. ~30-40% slower.
-
-STBDDEF void stb_compress_dxt_block(unsigned char *dest, const unsigned char *src_rgba_four_bytes_per_pixel, int alpha, int mode);
-STBDDEF void stb_compress_bc4_block(unsigned char *dest, const unsigned char *src_r_one_byte_per_pixel);
-STBDDEF void stb_compress_bc5_block(unsigned char *dest, const unsigned char *src_rg_two_byte_per_pixel);
-
-#define STB_COMPRESS_DXT_BLOCK
-
-#ifdef __cplusplus
-}
-#endif
-#endif // STB_INCLUDE_STB_DXT_H
-
-#ifdef STB_DXT_IMPLEMENTATION
-
-// configuration options for DXT encoder. set them in the project/makefile or just define
-// them at the top.
-
-// STB_DXT_USE_ROUNDING_BIAS
-//     use a rounding bias during color interpolation. this is closer to what "ideal"
-//     interpolation would do but doesn't match the S3TC/DX10 spec. old versions (pre-1.03)
-//     implicitly had this turned on.
-//
-//     in case you're targeting a specific type of hardware (e.g. console programmers):
-//     NVidia and Intel GPUs (as of 2010) as well as DX9 ref use DXT decoders that are closer
-//     to STB_DXT_USE_ROUNDING_BIAS. AMD/ATI, S3 and DX10 ref are closer to rounding with no bias.
-//     you also see "(a*5 + b*3) / 8" on some old GPU designs.
-// #define STB_DXT_USE_ROUNDING_BIAS
-
-#include <stdlib.h>
-
-#if !defined(STBD_FABS)
-#include <math.h>
-#endif
-
-#ifndef STBD_FABS
-#define STBD_FABS(x)          fabs(x)
-#endif
 
 static const unsigned char stb__OMatch5[256][2] = {
    {  0,  0 }, {  0,  0 }, {  0,  1 }, {  0,  1 }, {  1,  0 }, {  1,  0 }, {  1,  0 }, {  1,  1 },
@@ -188,14 +141,9 @@ static unsigned short stb__As16Bit(int r, int g, int b)
 // linear interpolation at 1/3 point between a and b, using desired rounding type
 static int stb__Lerp13(int a, int b)
 {
-#ifdef STB_DXT_USE_ROUNDING_BIAS
-   // with rounding bias
-   return a + stb__Mul8Bit(b-a, 0x55);
-#else
    // without rounding bias
    // replace "/ 3" by "* 0xaaab) >> 17" if your compiler sucks or you really need every ounce of speed.
    return (2*a + b) / 3;
-#endif
 }
 
 // lerp RGB color
@@ -329,9 +277,9 @@ static void stb__OptimizeColorsBlock(unsigned char *block, unsigned short *pmax1
     vfb = b;
   }
 
-  magn = STBD_FABS(vfr);
-  if (STBD_FABS(vfg) > magn) magn = STBD_FABS(vfg);
-  if (STBD_FABS(vfb) > magn) magn = STBD_FABS(vfb);
+  magn = fabs(vfr);
+  if (fabs(vfg) > magn) magn = fabs(vfg);
+  if (fabs(vfb) > magn) magn = fabs(vfb);
 
    if(magn < 4.0f) { // too small, default to luminance
       v_r = 299; // JPEG YCbCr luma coefs, scaled by 1000.
@@ -624,57 +572,11 @@ void stb_compress_bc5_block(unsigned char *dest, const unsigned char *src)
    stb__CompressAlphaBlock(dest,(unsigned char*) src,2);
    stb__CompressAlphaBlock(dest + 8,(unsigned char*) src+1,2);
 }
-#endif // STB_DXT_IMPLEMENTATION
 
-// Compile with STB_DXT_IMPLEMENTATION and STB_DXT_GENERATE_TABLES
-// defined to generate the tables above.
-#ifdef STB_DXT_GENERATE_TABLES
-#include <stdio.h>
-
-int main()
-{
-   int i, j;
-   const char *omatch_names[] = { "stb__OMatch5", "stb__OMatch6" };
-   int dequant_mults[2] = { 33*4, 65 }; // .4 fixed-point dequant multipliers
-
-   // optimal endpoint tables
-   for (i = 0; i < 2; ++i) {
-      int dequant = dequant_mults[i];
-      int size = i ? 64 : 32;
-      printf("static const unsigned char %s[256][2] = {\n", omatch_names[i]);
-      for (int j = 0; j < 256; ++j) {
-         int mn, mx;
-         int best_mn = 0, best_mx = 0;
-         int best_err = 256 * 100;
-         for (mn=0;mn<size;mn++) {
-            for (mx=0;mx<size;mx++) {
-               int mine = (mn * dequant) >> 4;
-               int maxe = (mx * dequant) >> 4;
-               int err = abs(stb__Lerp13(maxe, mine) - j) * 100;
-
-               // DX10 spec says that interpolation must be within 3% of "correct" result,
-               // add this as error term. Normally we'd expect a random distribution of
-               // +-1.5% error, but nowhere in the spec does it say that the error has to be
-               // unbiased - better safe than sorry.
-               err += abs(maxe - mine) * 3;
-
-               if(err < best_err) {
-                  best_mn = mn;
-                  best_mx = mx;
-                  best_err = err;
-               }
-            }
-         }
-         if ((j % 8) == 0) printf("  "); // 2 spaces, third is done below
-         printf(" { %2d, %2d },", best_mx, best_mn);
-         if ((j % 8) == 7) printf("\n");
-      }
-      printf("};\n");
-   }
-
-   return 0;
+int
+ImagingBcnEncode(Imaging im, ImagingCodecState state, UINT8 *buf, int bytes) {
+    // TODO implement me!
 }
-#endif
 
 /*
 ------------------------------------------------------------------------------
